@@ -10,28 +10,36 @@ import Foundation
 final class FairyCore {
     private let model: FairyModel
     private let catalog: AppCatalog
-    private let router: LocalRouter
+    private let store = SkillStore()
     private let llm = LLMRouter()
-    private let executor = Executor()
+    private let runner = SkillRunner()
 
     init(model: FairyModel) {
         self.model = model
-        let catalog = AppCatalog()
-        self.catalog = catalog
-        self.router = LocalRouter(catalog: catalog)
+        self.catalog = AppCatalog()
+        Storage.seedIfNeeded()
+        store.reloadIfNeeded()
     }
 
     func handle(_ text: String) async {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
 
-        // 1. Быстрый локальный путь: без сети и без токенов
-        if let action = router.route(clean) {
-            await execute(action)
+        // Подхватываем правки в файлах навыков (без перезапуска)
+        if store.reloadIfNeeded(), let first = store.errors.first {
+            await show(.error("Ошибка навыка: \(first.prefix(50))"), for: 4)
+        }
+
+        let resolver = ParamResolver(catalog: catalog, aliases: store.aliases)
+
+        // 1. Локальный путь: мгновенно, без сети и токенов
+        let router = SkillRouter(skills: store.skills, resolver: resolver)
+        if let inv = router.route(clean) {
+            await execute(inv)
             return
         }
 
-        // 2. Запасной путь: нейросеть
+        // 2. Нейросеть выбирает навык из списка
         guard let key = Keychain.load(account: "groq") else {
             await show(.error("Не поняла (нет ключа Groq)"), for: 2.5)
             return
@@ -39,12 +47,13 @@ final class FairyCore {
 
         model.status = .thinking
         do {
-            let reply = try await llm.route(clean, apiKey: key, catalog: catalog)
-            guard let action = FairyAction(reply: reply, catalog: catalog) else {
+            let reply = try await llm.route(clean, apiKey: key, skills: store.skills,
+                                            catalog: catalog, aliases: store.aliases)
+            guard let inv = resolver.invocation(from: reply, skills: store.skills) else {
                 await show(.error("Не поняла: \(clean.prefix(30))"), for: 2)
                 return
             }
-            await execute(action)
+            await execute(inv)
         } catch let error as LLMRouter.LLMError {
             await show(.error(error.message), for: 2.5)
         } catch let error as URLError {
@@ -55,11 +64,20 @@ final class FairyCore {
         }
     }
 
-    private func execute(_ action: FairyAction) async {
-        model.status = .executing(action.display)
+    private func execute(_ inv: Invocation) async {
+        // Подтверждения мы ещё не сделали, поэтому такие навыки не запускаем
+        if inv.skill.confirm == true {
+            await show(.error("Нужно подтверждение (скоро)"), for: 2.5)
+            return
+        }
+        let shown = runner.displayText(for: inv)
+        model.status = .executing(shown)
         do {
-            try await executor.run(action)
-            await show(.executing(action.display), for: 1.2)
+            try await runner.run(inv)
+            await show(.executing(shown), for: 1.2)
+        } catch let error as SkillRunner.RunError {
+            print("Run error:", error.message)
+            await show(.error("Ошибка команды"), for: 2)
         } catch {
             await show(.error("Ошибка команды"), for: 2)
         }

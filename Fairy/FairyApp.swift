@@ -42,6 +42,7 @@ struct CommandBar: View {
                 }
             HStack {
                 Button("Настройки…", action: openSettings)
+                Button("Навыки") { Storage.openSkillsFolder() }
                 Button("Демо", action: demo)
                 Spacer()
                 Button("Выход") { NSApp.terminate(nil) }

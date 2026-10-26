@@ -78,7 +78,16 @@ struct SettingsView: View {
                 Button("Вернуть модель по умолчанию") { llmModel = Prefs.defaultModel }
                     .disabled(llmModel == Prefs.defaultModel)
             }
-
+            
+            Section("Навыки") {
+                HStack {
+                    Button("Открыть папку навыков") { Storage.openSkillsFolder() }
+                    Button("Восстановить стандартные") { Storage.restoreDefaults() }
+                }
+                Text("Изменения в файлах подхватываются со следующей командой. «Восстановить» дописывает только удалённые стандартные навыки, твои правки не трогает.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            
             Section("Управление с iPhone") {
                 Toggle("Сервер включён", isOn: $serverEnabled)
                 LabeledContent("Статус", value: app.serverStatus)
