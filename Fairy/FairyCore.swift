@@ -10,18 +10,24 @@ import Foundation
 final class FairyCore {
     private let model: FairyModel
     private let catalog: AppCatalog
+    private let sites: SiteCatalog
     private let store = SkillStore()
     private let llm = LLMRouter()
     private let runner = SkillRunner()
-    private var token = 0   // защита от старых таймеров: новая команда отменяет «возврат в idle»
+
+    /// Команды из разных источников выполняются по очереди.
+    private var pipeline: Task<Void, Never>?
+    private var hideTask: Task<Void, Never>?
+    private var token = 0   // Защита от устаревших таймеров статуса.
 
     init(model: FairyModel) {
         self.model = model
         self.catalog = AppCatalog()
+        self.sites = SiteCatalog()
         Storage.seedIfNeeded()
         store.reloadIfNeeded()
     }
-    
+
     func skillsInfo() -> (skills: [Skill], errors: [String]) {
         store.reloadIfNeeded()
         return (store.skills, store.errors)
@@ -31,78 +37,99 @@ final class FairyCore {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
 
-        // Подхватываем правки в файлах навыков (без перезапуска)
+        let previous = pipeline
+        let task = Task { @MainActor in
+            await previous?.value
+            await self.process(clean)
+        }
+        pipeline = task
+        await task.value
+    }
+
+    private func process(_ clean: String) async {
+        hideTask?.cancel()
+        hideTask = nil
+        catalog.reloadIfNeeded()
+        sites.reloadIfNeeded()
+
+        // Подхватываем правки в файлах навыков без перезапуска.
         if store.reloadIfNeeded(), let first = store.errors.first {
-            await show(.error("Ошибка навыка: \(first.prefix(50))"), for: 4)
+            flash(.error("Ошибка навыка: \(first.prefix(50))"), for: 4)
         }
 
-        let resolver = ParamResolver(catalog: catalog, aliases: store.aliases)
+        let resolver = ParamResolver(catalog: catalog, sites: sites, aliases: store.aliases)
 
-        // 1. Локальный путь: мгновенно, без сети и токенов
+        // Локальный путь остаётся мгновенным и не расходует сетевые запросы.
         let router = SkillRouter(skills: store.skills, resolver: resolver)
-        if let inv = router.route(clean) {
-            await execute(inv)
+        if let invocations = router.routeSequence(clean) {
+            for invocation in invocations {
+                await execute(invocation)
+            }
             return
         }
+
         guard UserDefaults.standard.bool(forKey: Prefs.llmEnabled) else {
-            await show(.error("Не поняла: \(clean.prefix(30))"), for: 2)
+            flash(.error("Не поняла: \(clean.prefix(30))"), for: 2)
             return
         }
-        // 2. Нейросеть выбирает навык из списка
         guard let key = Keychain.load(account: "groq") else {
-            await show(.error("Не поняла (нет ключа Groq)"), for: 2.5)
+            flash(.error("Не поняла (нет ключа Groq)"), for: 2.5)
             return
         }
 
         set(.thinking)
         do {
-            let reply = try await llm.route(clean, apiKey: key, skills: store.skills,
-                                            catalog: catalog, aliases: store.aliases)
-            guard let inv = resolver.invocation(from: reply, skills: store.skills) else {
-                await show(.error("Не поняла: \(clean.prefix(30))"), for: 2)
+            let reply = try await llm.route(
+                clean,
+                apiKey: key,
+                skills: store.skills,
+                catalog: catalog,
+                aliases: store.aliases
+            )
+            guard let invocation = resolver.invocation(from: reply, skills: store.skills) else {
+                flash(.error("Не поняла: \(clean.prefix(30))"), for: 2)
                 return
             }
-            await execute(inv)
+            await execute(invocation)
         } catch let error as LLMRouter.LLMError {
-            await show(.error(error.message), for: 2.5)
+            flash(.error(error.message), for: 2.5)
         } catch let error as URLError {
             print("URLError:", error.code.rawValue, error.localizedDescription)
-            await show(.error("Сеть: \(error.code.rawValue)"), for: 4)
+            flash(.error("Сеть: \(error.code.rawValue)"), for: 4)
         } catch {
-            await show(.error("Ошибка ответа"), for: 2.5)
+            flash(.error("Ошибка ответа"), for: 2.5)
         }
     }
 
-    private func execute(_ inv: Invocation) async {
-        // Подтверждения мы ещё не сделали, поэтому такие навыки не запускаем
-        if inv.skill.confirm == true {
-            await show(.error("Нужно подтверждение (скоро)"), for: 2.5)
+    private func execute(_ invocation: Invocation) async {
+        // Навыки с побочными эффектами требуют подтверждения, пока не появится UI подтверждения.
+        if invocation.skill.confirm == true {
+            flash(.error("Нужно подтверждение (скоро)"), for: 2.5)
             return
         }
 
-        let shown = runner.displayText(for: inv)
-        let icon = inv.skill.display?.icon
+        let shown = runner.displayText(for: invocation)
+        let icon = invocation.skill.display?.icon
         set(.executing(shown, icon: icon))
 
         do {
-            let raw = try await runner.run(inv)
+            let raw = try await runner.run(invocation)
             let output = SkillRunner.clean(raw)
-
-            if inv.skill.output == .show, !output.isEmpty {
-                await show(.result(output, icon: icon), for: holdTime(for: output))
+            if invocation.skill.output == .show, !output.isEmpty {
+                flash(.result(output, icon: icon), for: holdTime(for: output))
             } else {
-                await show(.executing(shown, icon: icon), for: 1.2)
+                flash(.executing(shown, icon: icon), for: 1.2)
             }
         } catch let error as SkillRunner.RunError {
             print("Run error:", error.message)
             let line = error.message.components(separatedBy: .newlines).first ?? ""
-            await show(.error("Ошибка: \(line.prefix(60))"), for: 3)
+            flash(.error("Ошибка: \(line.prefix(60))"), for: 3)
         } catch {
-            await show(.error("Ошибка команды"), for: 2)
+            flash(.error("Ошибка команды"), for: 2)
         }
     }
 
-    /// Чем длиннее текст, тем дольше он висит: от 3 до 10 секунд
+    /// Чем длиннее результат, тем дольше он отображается: от 3 до 10 секунд.
     private func holdTime(for text: String) -> Double {
         let factor = UserDefaults.standard.double(forKey: Prefs.holdFactor)
         let base = min(10, max(3, 2 + Double(text.count) * 0.07))
@@ -114,10 +141,19 @@ final class FairyCore {
         model.status = status
     }
 
-    private func show(_ status: FairyStatus, for seconds: Double) async {
+    private func flash(_ status: FairyStatus, for seconds: Double) {
+        hideTask?.cancel()
         set(status)
-        let mine = token
-        try? await Task.sleep(for: .seconds(seconds))
-        if token == mine { model.status = .idle }
+        let currentToken = token
+        hideTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .seconds(seconds))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, token == currentToken else { return }
+            model.status = .idle
+            hideTask = nil
+        }
     }
 }

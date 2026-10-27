@@ -167,7 +167,8 @@ final class SkillStore {
         for url in jsonFiles() {
             let name = url.lastPathComponent
             do {
-                let skill = try JSONDecoder().decode(Skill.self, from: Data(contentsOf: url))
+                let decoded = try JSONDecoder().decode(Skill.self, from: Data(contentsOf: url))
+                let skill = upgradeBundledSkill(decoded)
                 if let problem = skill.validate() { errs.append("\(name): \(problem)"); continue }
                 if !seen.insert(skill.id).inserted { errs.append("\(name): id «\(skill.id)» уже занят"); continue }
                 loaded.append(skill)
@@ -188,6 +189,23 @@ final class SkillStore {
         skills = loaded
         errors = errs
         for e in errs { print("Skill error:", e) }
+    }
+
+    /// Keeps an untouched, older copy of the bundled URL skill opening pages in Safari.
+    /// User-edited commands are preserved.
+    private func upgradeBundledSkill(_ skill: Skill) -> Skill {
+        guard skill.id == "open_url", skill.run == [["open", "{url}"]] else { return skill }
+        return Skill(
+            id: skill.id,
+            description: skill.description,
+            triggers: skill.triggers,
+            params: skill.params,
+            run: [["open", "-a", "Safari", "{url}"]],
+            display: skill.display,
+            output: skill.output,
+            timeout: skill.timeout,
+            confirm: skill.confirm
+        )
     }
 
     private func describe(_ e: Error) -> String {

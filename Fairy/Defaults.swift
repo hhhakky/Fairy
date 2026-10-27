@@ -71,10 +71,11 @@ enum Defaults {
         {
           "id": "open_url",
           "description": "Open a website in the default browser",
-          "triggers": ["открой сайт {url}", "открой {url}", "зайди на {url}", "зайди на сайт {url}",
-                       "перейди на {url}", "open site {url}", "open {url}"],
+          "triggers": ["открой сайт {url}", "открыть сайт {url}", "открой {url}", "открыть {url}",
+                       "зайди на {url}", "зайди на сайт {url}", "перейди на {url}",
+                       "open site {url}", "open url {url}", "open {url}"],
           "params": { "url": { "type": "url" } },
-          "run": [["open", "{url}"]],
+          "run": [["open", "-a", "Safari", "{url}"]],
           "display": "open {url}"
         }
         """#,
@@ -83,8 +84,8 @@ enum Defaults {
         {
           "id": "open_folder",
           "description": "Open a folder in Finder",
-          "triggers": ["открой папку {folder}", "покажи папку {folder}", "открой {folder}",
-                       "покажи {folder}", "open folder {folder}", "open {folder}"],
+          "triggers": ["открой папку {folder}", "открыть папку {folder}", "покажи папку {folder}",
+                       "открой {folder}", "открыть {folder}", "покажи {folder}", "open folder {folder}", "open {folder}"],
           "params": { "folder": { "type": "folder" } },
           "run": [["open", "{folder}"]],
           "display": "open {folder}"
