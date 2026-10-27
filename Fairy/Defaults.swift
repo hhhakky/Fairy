@@ -72,7 +72,7 @@ enum Defaults {
           "id": "open_url",
           "description": "Open a website in the default browser",
           "triggers": ["открой сайт {url}", "открой {url}", "зайди на {url}", "зайди на сайт {url}",
-                       "перейди на {url}", "open site {url}", "open {url}"],
+                       "перейди на {url}", "open site {url}", "open url {url}", "open {url}"],
           "params": { "url": { "type": "url" } },
           "run": [["open", "{url}"]],
           "display": "open {url}"
