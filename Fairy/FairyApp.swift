@@ -5,6 +5,7 @@
 //  Created by Riyat Rahim on 25.10.2026.
 //
 import SwiftUI
+import AppKit
 import Combine
 import Network
 
@@ -29,27 +30,48 @@ struct CommandBar: View {
     let core: FairyCore
     let openSettings: () -> Void
     let demo: () -> Void
+
+    @AppStorage(Prefs.accentHex) private var accentHex = Prefs.Default.accentHex
     @State private var text = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField("Команда для феи…", text: $text)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit {
-                    let command = text
-                    text = ""
-                    Task { await core.handle(command) }
-                }
-            HStack {
-                Button("Настройки…", action: openSettings)
-                Button("Навыки") { Storage.openSkillsFolder() }
-                Button("Демо", action: demo)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Circle().fill(Color(hex: accentHex)).frame(width: 6, height: 6)
+                Text("FAIRY")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .tracking(2)
+                    .foregroundStyle(.secondary)
                 Spacer()
-                Button("Выход") { NSApp.terminate(nil) }
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color(hex: accentHex))
+                TextField("Команда…", text: $text)
+                    .textFieldStyle(.plain)
+                    .onSubmit {
+                        let command = text
+                        text = ""
+                        Task { await core.handle(command) }
+                    }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.primary.opacity(0.07)))
+
+            HStack(spacing: 6) {
+                IconButton("gearshape", "Настройки", action: openSettings)
+                IconButton("folder", "Папка навыков") { Storage.openSkillsFolder() }
+                IconButton("play", "Демо", action: demo)
+                Spacer()
+                IconButton("power", "Выход") { NSApp.terminate(nil) }
             }
         }
-        .padding(12)
-        .frame(width: 280)
+        .padding(14)
+        .frame(width: 290)
     }
 }
 
@@ -63,8 +85,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     private var panel: IslandPanel?
     private var server: CommandServer?
-    private var serverPort: UInt16?          // порт, на котором сервер запущен (или пытался)
+    private var serverPort: UInt16?
     private var settingsWindow: NSWindow?
+    private var previewToken = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = IslandPanel(model: model)
@@ -83,14 +106,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         return true
     }
 
-    // MARK: - Настройки
+    // MARK: - Окно настроек
 
     func openSettings() {
         if settingsWindow == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 640),
-                             styleMask: [.titled, .closable, .miniaturizable],
-                             backing: .buffered, defer: false)
-            w.title = "Fairy: настройки"
+            let w = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 800, height: 580),
+                styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+                backing: .buffered, defer: false)
+            w.titlebarAppearsTransparent = true
+            w.titleVisibility = .hidden
+            w.isMovableByWindowBackground = true
+            w.appearance = NSAppearance(named: .darkAqua)
+            w.backgroundColor = NSColor(red: 0.04, green: 0.045, blue: 0.065, alpha: 1)
             w.isReleasedWhenClosed = false
             w.contentView = NSHostingView(rootView: SettingsView(app: self))
             w.center()
@@ -161,7 +189,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         syncServer()
     }
 
-    // MARK: - Демо
+    // MARK: - Демо и предпросмотр
+
+    func preview(_ status: FairyStatus) {
+        previewToken += 1
+        let mine = previewToken
+        model.status = status
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            if previewToken == mine { model.status = .idle }
+        }
+    }
 
     func runDemo() {
         Task {
@@ -169,7 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             try? await Task.sleep(for: .seconds(1.5))
             model.status = .thinking
             try? await Task.sleep(for: .seconds(1.5))
-            model.status = .executing("open -a Ghostty")
+            model.status = .executing("open -a Ghostty", icon: nil)
             try? await Task.sleep(for: .seconds(2))
             model.status = .idle
         }

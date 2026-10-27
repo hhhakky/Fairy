@@ -5,29 +5,132 @@
 //  Created by Riyat Rahim on 26.10.2026.
 //
 import SwiftUI
+import AppKit
+import Combine
 import ServiceManagement
+
+enum SettingsTab: String, CaseIterable, Identifiable {
+    case general, island, ai, skills, phone, about
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general: return "Основное"
+        case .island: return "Остров"
+        case .ai: return "Нейросеть"
+        case .skills: return "Навыки"
+        case .phone: return "iPhone"
+        case .about: return "О Фее"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .general: return "gearshape"
+        case .island: return "capsule"
+        case .ai: return "cpu"
+        case .skills: return "bolt"
+        case .phone: return "iphone"
+        case .about: return "info.circle"
+        }
+    }
+}
 
 struct SettingsView: View {
     @ObservedObject var app: AppDelegate
+    @AppStorage(Prefs.accentHex) private var accentHex = Prefs.Default.accentHex
+    @State private var tab: SettingsTab = .general
 
-    @AppStorage(Prefs.showMenuBarIcon) private var showMenuBarIcon = true
-    @AppStorage(Prefs.showIsland) private var showIsland = true
-    @AppStorage(Prefs.llmModel) private var llmModel = Prefs.defaultModel
-    @AppStorage(Prefs.serverEnabled) private var serverEnabled = true
-    @AppStorage(Prefs.serverPort) private var serverPort = 8765
-
-    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
-    @State private var newKey = ""
-    @State private var hasKey = Keychain.load(account: "groq") != nil
-    @State private var keyCheck = ""
-    @State private var portText = ""
-    @State private var tokenVisible = false
-    @State private var confirmReset = false
+    private var accent: Color { Color(hex: accentHex) }
 
     var body: some View {
-        Form {
-            Section("Основное") {
-                Toggle("Запускать при входе в систему", isOn: $launchAtLogin)
+        HStack(spacing: 0) {
+            sidebar
+            Rectangle().fill(UI.stroke).frame(width: 1)
+            ScrollView {
+                page
+                    .padding(.horizontal, 24)
+                    .padding(.top, 36)
+                    .padding(.bottom, 24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(width: 800, height: 580)
+        .background(
+            ZStack {
+                UI.bg
+                RadialGradient(colors: [accent.opacity(0.10), Color.clear],
+                               center: .topTrailing, startRadius: 0, endRadius: 440)
+            }
+            .ignoresSafeArea()
+        )
+        .foregroundStyle(UI.text)
+        .tint(accent)
+        .preferredColorScheme(.dark)
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Circle().fill(accent).frame(width: 7, height: 7)
+                    .shadow(color: accent.opacity(0.8), radius: 4)
+                Text("FAIRY")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .tracking(3)
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 18)
+
+            ForEach(SettingsTab.allCases) { t in
+                Button { tab = t } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: t.symbol).frame(width: 18)
+                        Text(t.title).font(.system(size: 13, weight: .medium))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(tab == t ? accent.opacity(0.16) : Color.clear))
+                    .foregroundStyle(tab == t ? accent : UI.text)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 40)
+        .padding(.bottom, 16)
+        .frame(width: 190)
+    }
+
+    @ViewBuilder private var page: some View {
+        switch tab {
+        case .general: GeneralPage()
+        case .island: IslandPage(app: app)
+        case .ai: AIPage()
+        case .skills: SkillsPage(app: app)
+        case .phone: PhonePage(app: app)
+        case .about: AboutPage()
+        }
+    }
+}
+
+struct GeneralPage: View {
+    @AppStorage(Prefs.showMenuBarIcon) private var showMenuBarIcon = true
+    @AppStorage(Prefs.showIsland) private var showIsland = true
+    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            PageTitle("Основное", "Запуск и видимость")
+
+            Card("Запуск") {
+                SwitchRow("Запускать при входе в систему",
+                          subtitle: "Надёжнее всего работает из папки «Программы»",
+                          isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in
                         do {
                             if on { try SMAppService.mainApp.register() }
@@ -36,115 +139,47 @@ struct SettingsView: View {
                             launchAtLogin = SMAppService.mainApp.status == .enabled
                         }
                     }
+            }
 
-                Toggle("Иконка в меню-баре", isOn: $showMenuBarIcon)
+            Card("Видимость") {
+                SwitchRow("Иконка в меню-баре", isOn: $showMenuBarIcon)
                 if !showMenuBarIcon {
                     Text("Чтобы вернуть иконку или открыть настройки, запусти Fairy ещё раз (Spotlight или Finder).")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.system(size: 11)).foregroundStyle(UI.dim)
                 }
-
-                Toggle("Остров сверху экрана", isOn: $showIsland)
-            }
-
-            Section("Нейросеть (Groq)") {
-                HStack {
-                    Text("Ключ")
-                    Spacer()
-                    Text(hasKey ? "сохранён ✓" : "не задан")
-                        .foregroundStyle(hasKey ? .green : .secondary)
-                }
-                SecureField("Вставь новый ключ gsk_…", text: $newKey)
-                HStack {
-                    Button("Сохранить") {
-                        let k = newKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !k.isEmpty else { return }
-                        Keychain.save(k, account: "groq")
-                        newKey = ""
-                        hasKey = true
-                        keyCheck = ""
-                    }
-                    .disabled(newKey.isEmpty)
-                    Button("Проверить", action: checkKey).disabled(!hasKey)
-                    Button("Удалить", role: .destructive) {
-                        Keychain.delete(account: "groq")
-                        hasKey = false
-                        keyCheck = ""
-                    }
-                    .disabled(!hasKey)
-                    Spacer()
-                    Text(keyCheck).font(.caption).foregroundStyle(.secondary)
-                }
-                TextField("Модель", text: $llmModel)
-                Button("Вернуть модель по умолчанию") { llmModel = Prefs.defaultModel }
-                    .disabled(llmModel == Prefs.defaultModel)
-            }
-            
-            Section("Навыки") {
-                HStack {
-                    Button("Открыть папку навыков") { Storage.openSkillsFolder() }
-                    Button("Восстановить стандартные") { Storage.restoreDefaults() }
-                }
-                Text("Изменения в файлах подхватываются со следующей командой. «Восстановить» дописывает только удалённые стандартные навыки, твои правки не трогает.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            
-            Section("Управление с iPhone") {
-                Toggle("Сервер включён", isOn: $serverEnabled)
-                LabeledContent("Статус", value: app.serverStatus)
-                HStack {
-                    TextField("Порт", text: $portText)
-                        .frame(width: 80)
-                    Button("Применить") {
-                        if let p = Int(portText), (1024...65535).contains(p) {
-                            serverPort = p
-                        } else {
-                            portText = String(serverPort)
-                        }
-                    }
-                    .disabled(portText == String(serverPort))
-                }
-
-                Text(tokenVisible ? app.serverToken : String(repeating: "•", count: 32))
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .lineLimit(2)
-                HStack {
-                    Button(tokenVisible ? "Скрыть токен" : "Показать токен") { tokenVisible.toggle() }
-                    Button("Копировать") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(app.serverToken, forType: .string)
-                    }
-                    Button("Сбросить…", role: .destructive) { confirmReset = true }
-                }
-                .confirmationDialog("Сбросить токен?", isPresented: $confirmReset) {
-                    Button("Сбросить", role: .destructive) { app.regenerateToken() }
-                } message: {
-                    Text("Шорткат на iPhone придётся обновить новым токеном.")
-                }
+                SwitchRow("Остров сверху экрана", isOn: $showIsland)
             }
         }
-        .formStyle(.grouped)
-        .frame(width: 460, height: 640)
-        .onAppear { portText = String(serverPort) }
+    }
+}
+
+struct AboutPage: View {
+    @State private var confirmReset = false
+
+    private var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
     }
 
-    private func checkKey() {
-        guard let key = Keychain.load(account: "groq") else { keyCheck = "Ключа нет"; return }
-        keyCheck = "Проверяю…"
-        Task { @MainActor in
-            var req = URLRequest(url: URL(string: "https://api.groq.com/openai/v1/models")!)
-            req.timeoutInterval = 10
-            req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-            do {
-                let (_, resp) = try await URLSession.shared.data(for: req)
-                let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-                switch code {
-                case 200: keyCheck = "Ключ работает ✓"
-                case 401: keyCheck = "Неверный ключ"
-                default:  keyCheck = "Ошибка \(code)"
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            PageTitle("О Фее", "Версия \(version)")
+
+            Card("Файлы") {
+                Row("Папка данных", subtitle: Storage.root.path) {
+                    ActionButton("Показать") {
+                        NSWorkspace.shared.activateFileViewerSelecting([Storage.root])
+                    }
                 }
-            } catch {
-                keyCheck = "Нет связи"
+            }
+
+            Card("Сброс") {
+                Row("Сбросить все настройки",
+                    subtitle: "Ключ Groq, токен и навыки не затрагиваются") {
+                    ActionButton("Сбросить…", destructive: true) { confirmReset = true }
+                }
+            }
+            .confirmationDialog("Сбросить все настройки?", isPresented: $confirmReset) {
+                Button("Сбросить", role: .destructive) { Prefs.resetAll() }
             }
         }
     }

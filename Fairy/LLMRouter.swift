@@ -78,7 +78,8 @@ struct LLMRouter {
                catalog: AppCatalog, aliases: Aliases) async throws -> Reply {
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
-        req.timeoutInterval = 10
+        let t = UserDefaults.standard.double(forKey: Prefs.llmTimeout)
+        req.timeoutInterval = t > 0 ? t : 10
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 

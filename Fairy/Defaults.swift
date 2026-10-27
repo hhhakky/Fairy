@@ -112,9 +112,38 @@ enum Defaults {
           "run": [["open", "https://www.google.com/search?q={query}"]],
           "display": "google: {query}"
         }
+        """#,
+        "weather.json": #"""
+        {
+          "id": "weather",
+          "description": "Show the current weather in Almaty",
+          "triggers": ["погода", "какая погода", "что с погодой", "weather"],
+          "run": [["curl", "-s", "-f", "-m", "8", "wttr.in/Almaty?format=%c+%t+%w&lang=ru&m"]],
+          "output": "show",
+          "display": { "text": "погода…", "icon": "cloud.sun" }
+        }
+        """#,
+
+        "weather_city.json": #"""
+        {
+          "id": "weather_city",
+          "description": "Show the current weather in the given city",
+          "triggers": ["погода в {city}", "какая погода в {city}", "weather in {city}"],
+          "params": { "city": { "type": "query" } },
+          "run": [["weather.sh", "{city}"]],
+          "output": "show",
+          "display": { "text": "погода…", "icon": "cloud.sun" }
+        }
         """#
     ]
-
+    static let scripts: [String: String] = [
+        "weather.sh": #"""
+        #!/bin/bash
+        # $1 — город (уже закодирован для адреса). Если не передан, берём Almaty.
+        city="${1:-Almaty}"
+        curl -s -f -m 8 "wttr.in/${city}?format=%c+%t+%w&lang=ru&m" || echo "нет данных о погоде"
+        """#
+    ]
     static let aliases = #"""
     {
       "apps": {

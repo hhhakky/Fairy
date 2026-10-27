@@ -8,7 +8,7 @@ import SwiftUI
 import AppKit
 
 final class IslandPanel: NSPanel {
-    private let size = NSSize(width: 480, height: 60)
+    private let size = NSSize(width: 640, height: 140)
 
     init(model: FairyModel) {
         super.init(
@@ -29,8 +29,9 @@ final class IslandPanel: NSPanel {
 
     func show() {
         guard let screen = NSScreen.main else { return }
+        let offset = CGFloat(UserDefaults.standard.double(forKey: Prefs.topOffset))
         let x = screen.frame.midX - size.width / 2
-        let y = screen.frame.maxY - size.height - 10
+        let y = screen.frame.maxY - size.height - offset
         setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
         orderFrontRegardless()
     }

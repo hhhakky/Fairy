@@ -16,13 +16,43 @@ struct ParamSpec: Codable {
     let max: Int?
 }
 
+enum OutputMode: String, Codable {
+    case none, show
+}
+
+/// "display" можно писать строкой ("open -a {app}") или объектом ({"text": "...", "icon": "..."})
+struct DisplaySpec: Codable {
+    let text: String?
+    let icon: String?
+
+    private enum Keys: String, CodingKey { case text, icon }
+
+    init(from decoder: Decoder) throws {
+        if let o = try? decoder.container(keyedBy: Keys.self) {
+            text = try o.decodeIfPresent(String.self, forKey: .text)
+            icon = try o.decodeIfPresent(String.self, forKey: .icon)
+        } else {
+            text = try decoder.singleValueContainer().decode(String.self)
+            icon = nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var o = encoder.container(keyedBy: Keys.self)
+        try o.encodeIfPresent(text, forKey: .text)
+        try o.encodeIfPresent(icon, forKey: .icon)
+    }
+}
+
 struct Skill: Codable {
     let id: String
     let description: String
     let triggers: [String]?
     let params: [String: ParamSpec]?
     let run: [[String]]
-    let display: String?
+    let display: DisplaySpec?
+    let output: OutputMode?
+    let timeout: Int?
     let confirm: Bool?
 
     /// Возвращает понятное описание ошибки или nil, если навык корректен
@@ -32,10 +62,14 @@ struct Skill: Codable {
             return "в «run» должна быть хотя бы одна непустая команда"
         }
         if run.contains(where: { $0[0].contains("{") }) {
-            return "первый элемент в «run» (имя программы) не может содержать параметры"
+            return "первый элемент в «run» (программа или скрипт) не может содержать параметры"
+        }
+        if let t = timeout, !(1...120).contains(t) {
+            return "timeout должен быть от 1 до 120 секунд"
         }
         let known = Set((params ?? [:]).keys)
-        let texts = run.flatMap { $0 } + (display.map { [$0] } ?? []) + (triggers ?? [])
+        var texts = run.flatMap { $0 } + (triggers ?? [])
+        if let d = display?.text { texts.append(d) }
         for name in texts.flatMap(placeholders) where !known.contains(name) {
             return "используется {\(name)}, но такого параметра нет в «params»"
         }
@@ -164,10 +198,11 @@ final class SkillStore {
             case .typeMismatch(_, let c), .valueNotFound(_, let c):
                 return "неверный тип в «\(c.codingPath.map(\.stringValue).joined(separator: "."))»"
             case .dataCorrupted(let c):
-                if c.codingPath.last?.stringValue == "type" {
-                    return "неизвестный type (допустимо: app, folder, url, text, query, int)"
+                switch c.codingPath.last?.stringValue {
+                case "type":   return "неизвестный type (допустимо: app, folder, url, text, query, int)"
+                case "output": return "неизвестный output (допустимо: none, show)"
+                default:       return "ошибка JSON (проверь запятые и кавычки)"
                 }
-                return "ошибка JSON (проверь запятые и кавычки)"
             @unknown default: break
             }
         }
