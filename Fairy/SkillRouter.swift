@@ -82,39 +82,13 @@ struct SkillRouter {
             }
         }
 
-        // Больше литералов → конкретнее. При ничьей — тип параметра, который реально подходит.
-        var resolved: [(Candidate, [String: String], Int)] = []
-        for c in candidates {
-            guard let values = resolver.resolveAll(c.skill, given: c.captured) else { continue }
-            resolved.append((c, values, fit(c.skill, captured: c.captured)))
-        }
-        resolved.sort {
-            if $0.0.literals != $1.0.literals { return $0.0.literals > $1.0.literals }
-            if $0.2 != $1.2 { return $0.2 > $1.2 }
-            return $0.0.order < $1.0.order
-        }
-        return resolved.first.map { Invocation(skill: $0.0.skill, values: $0.1) }
-    }
-
-    /// Насколько захваченный текст похож на заявленный тип параметра.
-    private func fit(_ skill: Skill, captured: [String: String]) -> Int {
-        var score = 0
-        for (name, spec) in skill.params ?? [:] {
-            let raw = captured[name] ?? ""
-            let key = normalize(raw)
-            switch spec.type {
-            case .url:
-                if resolver.aliases.sites[key] != nil || raw.contains(".") { score += 3 }
-            case .folder:
-                if resolver.aliases.folders[key] != nil
-                    || raw.hasPrefix("~") || raw.hasPrefix("/") { score += 3 }
-            case .app:
-                let appName = resolver.aliases.apps[key] ?? key
-                score += resolver.catalog.matchQuality(appName)
-            default:
-                score += 1
+        // Чем больше в шаблоне точных слов, тем он конкретнее
+        let sorted = candidates.sorted { ($0.literals, -$0.order) > ($1.literals, -$1.order) }
+        for c in sorted {
+            if let values = resolver.resolveAll(c.skill, given: c.captured) {
+                return Invocation(skill: c.skill, values: values)
             }
         }
-        return score
+        return nil
     }
 }
