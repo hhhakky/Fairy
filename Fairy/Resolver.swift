@@ -11,12 +11,20 @@ final class SiteCatalog {
     private struct Bookmark {
         let title: String
         let url: String
+        // Нормализация считается один раз при загрузке, а не при каждом сопоставлении
+        let nTitle: String
+        let nURL: String
+        let nHost: String
     }
 
     private let bookmarksURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Safari/Bookmarks.plist")
     private var fingerprint = ""
     private var bookmarks: [Bookmark] = []
+
+    /// false, если файл не удалось прочитать (обычно нет «Полного доступа к диску»)
+    private(set) var isReadable = false
+    var count: Int { bookmarks.count }
 
     init() {
         reloadIfNeeded()
@@ -29,7 +37,10 @@ final class SiteCatalog {
         let currentFingerprint = "\(bookmarksURL.path):\(modified)"
         guard currentFingerprint != fingerprint else { return false }
         fingerprint = currentFingerprint
-        bookmarks = Self.readBookmarks(from: bookmarksURL)
+
+        let loaded = Self.readBookmarks(from: bookmarksURL)
+        isReadable = loaded != nil
+        bookmarks = loaded ?? []
         return true
     }
 
@@ -58,21 +69,19 @@ final class SiteCatalog {
     }
 
     private func matchingBookmarks(for key: String, partial: Bool) -> [Bookmark] {
-        bookmarks.filter { bookmark in
-            let title = normalize(bookmark.title)
-            let urlText = normalize(bookmark.url)
-            let host = normalize(URLComponents(string: bookmark.url)?.host ?? "")
+        bookmarks.filter { b in
             if partial {
-                return title.contains(key) || host.contains(key) || urlText.contains(key)
+                return b.nTitle.contains(key) || b.nHost.contains(key) || b.nURL.contains(key)
             }
-            return title == key || host == key || urlText == key
+            return b.nTitle == key || b.nHost == key || b.nURL == key
         }
     }
 
-    private static func readBookmarks(from url: URL) -> [Bookmark] {
+    /// nil, если файл не прочитался или это не plist
+    private static func readBookmarks(from url: URL) -> [Bookmark]? {
         guard let data = try? Data(contentsOf: url),
               let root = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)
-        else { return [] }
+        else { return nil }
 
         var result: [Bookmark] = []
         func visit(_ value: Any) {
@@ -82,12 +91,16 @@ final class SiteCatalog {
                let components = URLComponents(string: rawURL),
                let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
                let host = components.host,
-               let url = components.url {
+               let link = components.url {
                 let uri = dictionary["URIDictionary"] as? [String: Any]
                 let title = (uri?["title"] as? String)
                     ?? (dictionary["Title"] as? String)
                     ?? host
-                result.append(Bookmark(title: title, url: url.absoluteString))
+                result.append(Bookmark(title: title,
+                                       url: link.absoluteString,
+                                       nTitle: normalize(title),
+                                       nURL: normalize(link.absoluteString),
+                                       nHost: normalize(host)))
             }
 
             for child in (dictionary["Children"] as? [Any]) ?? [] {
@@ -113,6 +126,8 @@ struct ParamResolver {
         return out
     }
 
+    /// Алиасы и приложения ищутся по нормализованному ключу,
+    /// а адреса, пути и текст сохраняют регистр как есть.
     func resolve(_ raw: String, _ spec: ParamSpec) -> String? {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.count <= 500 else { return nil }
@@ -129,7 +144,7 @@ struct ParamResolver {
 
         case .url:
             let key = normalize(text)
-            return makeURL(aliases.sites[key] ?? sites.resolve(text) ?? key)
+            return makeURL(aliases.sites[key] ?? sites.resolve(text) ?? text)
 
         case .text:
             return text
@@ -149,7 +164,7 @@ struct ParamResolver {
 
     private func resolveFolder(_ text: String) -> String? {
         let key = normalize(text)
-        var path = aliases.folders[key] ?? key
+        var path = aliases.folders[key] ?? text
         if !path.hasPrefix("/") && !path.hasPrefix("~") { path = "~/" + path }
         path = ((path as NSString).expandingTildeInPath as NSString).standardizingPath
 

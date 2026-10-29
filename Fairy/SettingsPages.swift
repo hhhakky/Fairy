@@ -237,6 +237,8 @@ struct SkillsPage: View {
     @ObservedObject var app: AppDelegate
     @State private var skills: [Skill] = []
     @State private var errors: [String] = []
+    @State private var sitesCount = 0
+    @State private var sitesReadable = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -266,7 +268,21 @@ struct SkillsPage: View {
                     }
                 }
             }
-
+            
+            Card("Закладки Safari") {
+                Row("Статус",
+                    subtitle: sitesReadable
+                        ? "Прочитано закладок: \(sitesCount)"
+                        : "Нет доступа. Дай Fairy «Полный доступ к диску» и перезапусти её") {
+                    if !sitesReadable {
+                        ActionButton("Открыть настройки") {
+                            NSWorkspace.shared.open(URL(string:
+                                "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
+                        }
+                    }
+                }
+            }
+            
             Card("Загружено: \(skills.count)") {
                 ForEach(skills, id: \.id) { s in
                     HStack(spacing: 10) {
@@ -298,6 +314,9 @@ struct SkillsPage: View {
         let info = app.core.skillsInfo()
         skills = info.skills
         errors = info.errors
+        let s = app.core.siteInfo()
+        sitesCount = s.count
+        sitesReadable = s.readable
     }
 
     private func symbol(for s: Skill) -> String {

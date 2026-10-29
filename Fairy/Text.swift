@@ -22,11 +22,21 @@ private func trimEnds(_ s: String) -> String {
     return String(t)
 }
 
+/// Слово в двух видах: norm для сопоставления, raw как сказал пользователь.
+struct Token {
+    let norm: String
+    let raw: String
+}
+
 /// Режем по пробелам и чистим знаки только по краям слов,
 /// поэтому youtube.com и ~/Downloads остаются целыми.
-func tokenize(_ s: String) -> [String] {
-    normalize(s)
-        .components(separatedBy: .whitespacesAndNewlines)
+func tokens(_ s: String) -> [Token] {
+    s.components(separatedBy: .whitespacesAndNewlines)
         .map(trimEnds)
         .filter { !$0.isEmpty }
+        .map { Token(norm: normalize($0), raw: $0) }
+}
+
+func tokenize(_ s: String) -> [String] {
+    tokens(s).map(\.norm)
 }

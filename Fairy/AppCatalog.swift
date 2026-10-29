@@ -30,31 +30,36 @@ final class AppCatalog {
         return true
     }
 
-    /// Точное совпадение — 3, единственный префикс — 1, неоднозначность — 0.
+    /// Точное совпадение — 3, единственный префикс или основа слова — 1, неоднозначность — 0.
     func matchQuality(_ query: String) -> Int {
-        let key = normalize(query)
-        guard !key.isEmpty else { return 0 }
-        if entries.contains(where: { $0.keys.contains(key) }) { return 3 }
-        guard key.count >= 3 else { return 0 }
-
-        let matches = entries.filter { $0.keys.contains { $0.hasPrefix(key) } }
-        return matches.count == 1 ? 1 : 0
+        lookup(query)?.quality ?? 0
     }
 
     /// Возвращает настоящее имя приложения для open -a или nil, если оно не найдено однозначно.
     func resolve(_ query: String) -> String? {
+        lookup(query)?.file
+    }
+
+    private func lookup(_ query: String) -> (file: String, quality: Int)? {
         let key = normalize(query)
         guard !key.isEmpty else { return nil }
 
         if let exact = entries.first(where: { $0.keys.contains(key) }) {
-            return exact.file
+            return (exact.file, 3)
         }
         guard key.count >= 3 else { return nil }
 
-        let matches = entries.filter { $0.keys.contains { $0.hasPrefix(key) } }
-        return matches.count == 1 ? matches[0].file : nil
-    }
+        let prefixed = entries.filter { $0.keys.contains { $0.hasPrefix(key) } }
+        if prefixed.count == 1 { return (prefixed[0].file, 1) }
+        if prefixed.count > 1 { return nil }
 
+        // «музыку» → «музыка», «заметку» → «заметки»: отбрасываем падежное окончание,
+        // но снова только при единственном совпадении
+        guard key.count >= 5 else { return nil }
+        let stem = String(key.dropLast(key.count >= 7 ? 2 : 1))
+        let stemmed = entries.filter { $0.keys.contains { $0.hasPrefix(stem) } }
+        return stemmed.count == 1 ? (stemmed[0].file, 1) : nil
+    }
     private static func searchDirectories() -> [String] {
         let home = NSHomeDirectory()
         return [

@@ -27,27 +27,29 @@ private func parsePattern(_ string: String) -> [PatToken] {
         }
 }
 
-/// Сопоставляет шаблон с фразой. Параметр в фигурных скобках захватывает одно или несколько слов.
+/// Сопоставляет шаблон с фразой по нормализованным словам,
+/// а в параметры забирает слова в том виде, как их сказали.
 private func match(
     _ pattern: ArraySlice<PatToken>,
-    _ input: ArraySlice<String>,
+    _ input: ArraySlice<Token>,
     _ captured: [String: String]
 ) -> [String: String]? {
     guard let first = pattern.first else { return input.isEmpty ? captured : nil }
 
     switch first {
     case .lit(let word):
-        guard input.first == word else { return nil }
+        guard input.first?.norm == word else { return nil }
         return match(pattern.dropFirst(), input.dropFirst(), captured)
 
     case .param(let name):
         guard !input.isEmpty else { return nil }
-        let remainingPattern = pattern.dropFirst()
-        for count in 1...input.count {
-            if remainingPattern.isEmpty && count != input.count { continue }
-            var nextCaptured = captured
-            nextCaptured[name] = input.prefix(count).joined(separator: " ")
-            if let result = match(remainingPattern, input.dropFirst(count), nextCaptured) {
+        let remaining = pattern.dropFirst()
+        // Последний параметр обязан забрать всё, что осталось
+        let counts = remaining.isEmpty ? input.count...input.count : 1...input.count
+        for count in counts {
+            var next = captured
+            next[name] = input.prefix(count).map(\.raw).joined(separator: " ")
+            if let result = match(remaining, input.dropFirst(count), next) {
                 return result
             }
         }
@@ -65,98 +67,132 @@ struct SkillRouter {
         "давай", "быстро", "сейчас", "потом", "затем", "можешь", "можно", "ты", "бы", "будь", "добр", "ка"
     ]
 
-    private let separators = [" и потом ", " и затем ", " а затем ", " после этого ", " затем ", " потом ", " и "]
+    private let separators: [[String]] = [
+        ["и", "потом"], ["и", "затем"], ["а", "затем"], ["после", "этого"],
+        ["затем"], ["потом"], ["и"]
+    ]
+    private let maxCommands = 5
+    private let maxSeparators = 12
 
-    private struct Candidate {
+    private struct Entry {
         let skill: Skill
-        let captured: [String: String]
-        let literalCount: Int
+        let pattern: [PatToken]
+        let literals: Int
         let order: Int
     }
+    private let entries: [Entry]
 
-    func route(_ raw: String) -> Invocation? {
-        var tokens = tokenize(raw).filter { !polite.contains($0) }
-        guard !tokens.isEmpty else { return nil }
-        // Russian infinitive wording is common in text requests ("открыть сайт").
-        // Normalize only the leading action so existing user-edited skill files still match.
-        if tokens.first == "открыть" { tokens[0] = "открой" }
+    init(skills: [Skill], resolver: ParamResolver) {
+        self.skills = skills
+        self.resolver = resolver
 
-        var candidates: [Candidate] = []
+        var list: [Entry] = []
         var order = 0
         for skill in skills {
             for trigger in skill.triggers ?? [] {
                 order += 1
                 let pattern = parsePattern(trigger)
-                guard !pattern.isEmpty,
-                      let captured = match(pattern[...], tokens[...], [:]) else { continue }
-                let literalCount = pattern.reduce(into: 0) { count, token in
+                guard !pattern.isEmpty else { continue }
+                let literals = pattern.reduce(into: 0) { count, token in
                     if case .lit = token { count += 1 }
                 }
-                candidates.append(Candidate(
-                    skill: skill,
-                    captured: captured,
-                    literalCount: literalCount,
-                    order: order
-                ))
+                list.append(Entry(skill: skill, pattern: pattern, literals: literals, order: order))
             }
         }
-
-        // Сначала конкретность шаблона, затем соответствие захваченного значения его типу.
-        let resolved = candidates.compactMap { candidate -> (Candidate, [String: String], Int)? in
-            guard let values = resolver.resolveAll(candidate.skill, given: candidate.captured) else {
-                return nil
-            }
-            return (candidate, values, fit(candidate.skill, captured: candidate.captured))
-        }
-        let best = resolved.sorted { lhs, rhs in
-            if lhs.0.literalCount != rhs.0.literalCount {
-                return lhs.0.literalCount > rhs.0.literalCount
-            }
-            if lhs.2 != rhs.2 {
-                return lhs.2 > rhs.2
-            }
-            return lhs.0.order < rhs.0.order
-        }.first
-
-        return best.map { Invocation(skill: $0.0.skill, values: $0.1) }
+        entries = list
     }
 
-    /// Splits a request only when every resulting phrase maps to a valid skill.
-    /// Trying splits before a broad query trigger preserves ordinary text such as "Tom and Jerry".
+    // MARK: - Одна команда
+
+    func route(_ raw: String) -> Invocation? {
+        route(tokens(raw)[...])
+    }
+
+    private func route(_ all: ArraySlice<Token>) -> Invocation? {
+        var input = all.filter { !polite.contains($0.norm) }
+        guard !input.isEmpty else { return nil }
+        // Инфинитив ("открыть сайт") приводим к повелительному, только первое слово
+        if input[0].norm == "открыть" {
+            input[0] = Token(norm: "открой", raw: input[0].raw)
+        }
+
+        // Сначала конкретность шаблона, затем соответствие значения типу параметра, затем порядок
+        var best: (inv: Invocation, literals: Int, fit: Int, order: Int)?
+        for entry in entries {
+            if let b = best, entry.literals < b.literals { continue }
+            guard let captured = match(entry.pattern[...], input[...], [:]),
+                  let values = resolver.resolveAll(entry.skill, given: captured) else { continue }
+
+            let candidate = (inv: Invocation(skill: entry.skill, values: values),
+                             literals: entry.literals,
+                             fit: fit(entry.skill, captured: captured),
+                             order: entry.order)
+            if let b = best {
+                let better: Bool
+                if candidate.literals != b.literals {
+                    better = candidate.literals > b.literals
+                } else if candidate.fit != b.fit {
+                    better = candidate.fit > b.fit
+                } else {
+                    better = candidate.order < b.order
+                }
+                if better { best = candidate }
+            } else {
+                best = candidate
+            }
+        }
+        return best?.inv
+    }
+
+    // MARK: - Цепочка команд
+
+    /// Делит фразу на команды, только если каждая часть распознаётся как навык.
+    /// Разбиения пробуются раньше цельной фразы, чтобы "Том и Джерри" в поиске остался целым.
     func routeSequence(_ raw: String) -> [Invocation]? {
-        routeSequence(raw, depth: 0)
-    }
+        let all = tokens(raw)
+        guard !all.isEmpty else { return nil }
 
-    private func routeSequence(_ raw: String, depth: Int) -> [Invocation]? {
-        guard depth < 5 else { return nil }
-        let text = normalize(raw)
-        for (range, _) in splitRanges(in: text) {
-            let leftText = String(text[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            let rightText = String(text[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !leftText.isEmpty, !rightText.isEmpty,
-                  let left = routeSequence(leftText, depth: depth + 1),
-                  let right = routeSequence(rightText, depth: depth + 1),
-                  left.count + right.count <= 5 else { continue }
-            return left + right
+        let spans = separatorSpans(in: all)
+        if spans.count > maxSeparators {
+            return route(all[...]).map { [$0] }
         }
 
-        guard let invocation = route(text) else { return nil }
-        return [invocation]
+        // solve(i) = лучший разбор хвоста, начиная со слова i. Каждый хвост считается один раз.
+        var memo: [Int: [Invocation]?] = [:]
+
+        func solve(_ start: Int) -> [Invocation]? {
+            if let cached = memo[start] { return cached }
+
+            var result: [Invocation]?
+            for span in spans where span.lower > start {
+                guard let left = route(all[start..<span.lower]),
+                      let rest = solve(span.upper),
+                      rest.count + 1 <= maxCommands else { continue }
+                result = [left] + rest
+                break
+            }
+            if result == nil, let whole = route(all[start...]) {
+                result = [whole]
+            }
+            memo[start] = .some(result)
+            return result
+        }
+
+        return solve(0)
     }
 
-    private func splitRanges(in text: String) -> [(Range<String.Index>, String)] {
-        var ranges: [(Range<String.Index>, String)] = []
-        for separator in separators {
-            var searchStart = text.startIndex
-            while searchStart < text.endIndex,
-                  let range = text.range(of: separator, range: searchStart..<text.endIndex) {
-                ranges.append((range, separator))
-                searchStart = range.upperBound
+    private func separatorSpans(in all: [Token]) -> [(lower: Int, upper: Int)] {
+        var spans: [(lower: Int, upper: Int)] = []
+        for i in all.indices {
+            for sep in separators where i + sep.count <= all.count {
+                if (0..<sep.count).allSatisfy({ all[i + $0].norm == sep[$0] }) {
+                    spans.append((lower: i, upper: i + sep.count))
+                }
             }
         }
-        return ranges.sorted { lhs, rhs in
-            if lhs.0.lowerBound != rhs.0.lowerBound { return lhs.0.lowerBound < rhs.0.lowerBound }
-            return lhs.1.count > rhs.1.count
+        // На одной позиции сначала длинный разделитель
+        return spans.sorted {
+            $0.lower != $1.lower ? $0.lower < $1.lower : $0.upper > $1.upper
         }
     }
 

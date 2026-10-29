@@ -28,7 +28,7 @@ final class IslandPanel: NSPanel {
     }
 
     func show() {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.screens.first ?? NSScreen.main else { return }
         let offset = CGFloat(UserDefaults.standard.double(forKey: Prefs.topOffset))
         let x = screen.frame.midX - size.width / 2
         let y = screen.frame.maxY - size.height - offset

@@ -83,17 +83,18 @@ struct LLMRouter {
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model,
             "temperature": 0,
             "max_tokens": 500,
-            "reasoning_effort": "low",
             "response_format": ["type": "json_object"],
             "messages": [
                 ["role": "system", "content": makePrompt(skills: skills, catalog: catalog, aliases: aliases)],
                 ["role": "user", "content": text]
             ]
         ]
+        // reasoning_effort понимают только модели gpt-oss, на остальных он даёт ошибку 400
+        if model.contains("gpt-oss") { body["reasoning_effort"] = "low" }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: req)
@@ -101,6 +102,7 @@ struct LLMRouter {
             throw LLMError(message: "Нет ответа")
         }
         guard http.statusCode == 200 else {
+            print("Groq error \(http.statusCode):", String(decoding: data.prefix(300), as: UTF8.self))
             switch http.statusCode {
             case 401: throw LLMError(message: "Неверный ключ")
             case 429: throw LLMError(message: "Лимит запросов")

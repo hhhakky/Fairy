@@ -4,6 +4,10 @@
 //
 //  Created by Riyat Rahim on 25.10.2026.
 //
+//
+//  FairyCore.swift
+//  Fairy
+//
 import Foundation
 
 @MainActor
@@ -17,6 +21,8 @@ final class FairyCore {
 
     /// Команды из разных источников выполняются по очереди.
     private var pipeline: Task<Void, Never>?
+    private var pending = 0
+    private let maxPending = 5
     private var hideTask: Task<Void, Never>?
     private var token = 0   // Защита от устаревших таймеров статуса.
 
@@ -33,9 +39,22 @@ final class FairyCore {
         return (store.skills, store.errors)
     }
 
+    func siteInfo() -> (count: Int, readable: Bool) {
+        sites.reloadIfNeeded()
+        return (sites.count, sites.isReadable)
+    }
+
     func handle(_ text: String) async {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
+
+        // Очередь не должна расти бесконечно: каждая команда может ждать нейросеть
+        guard pending < maxPending else {
+            flash(.error("Слишком много команд подряд"), for: 2)
+            return
+        }
+        pending += 1
+        defer { pending -= 1 }
 
         let previous = pipeline
         let task = Task { @MainActor in
@@ -62,8 +81,12 @@ final class FairyCore {
         // Локальный путь остаётся мгновенным и не расходует сетевые запросы.
         let router = SkillRouter(skills: store.skills, resolver: resolver)
         if let invocations = router.routeSequence(clean) {
-            for invocation in invocations {
-                await execute(invocation)
+            for (index, invocation) in invocations.enumerated() {
+                // Если шаг не удался, остальные не выполняем
+                guard await execute(invocation) else { return }
+                if index < invocations.count - 1 {
+                    try? await Task.sleep(for: .milliseconds(400))
+                }
             }
             return
         }
@@ -101,11 +124,13 @@ final class FairyCore {
         }
     }
 
-    private func execute(_ invocation: Invocation) async {
+    /// true, если навык выполнился без ошибки
+    @discardableResult
+    private func execute(_ invocation: Invocation) async -> Bool {
         // Навыки с побочными эффектами требуют подтверждения, пока не появится UI подтверждения.
         if invocation.skill.confirm == true {
             flash(.error("Нужно подтверждение (скоро)"), for: 2.5)
-            return
+            return false
         }
 
         let shown = runner.displayText(for: invocation)
@@ -120,12 +145,15 @@ final class FairyCore {
             } else {
                 flash(.executing(shown, icon: icon), for: 1.2)
             }
+            return true
         } catch let error as SkillRunner.RunError {
             print("Run error:", error.message)
             let line = error.message.components(separatedBy: .newlines).first ?? ""
             flash(.error("Ошибка: \(line.prefix(60))"), for: 3)
+            return false
         } catch {
             flash(.error("Ошибка команды"), for: 2)
+            return false
         }
     }
 

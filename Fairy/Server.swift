@@ -53,11 +53,21 @@ final class CommandServer {
     
     // MARK: - Соединение
 
+    private var active = 0            // трогаем только из queue
+    private let maxConnections = 16
+
     private func handle(_ conn: NWConnection) {
+        guard active < maxConnections else { conn.cancel(); return }
+        active += 1
+        conn.stateUpdateHandler = { [weak self] state in
+            if case .cancelled = state { self?.active -= 1 }
+        }
         conn.start(queue: queue)
         receive(conn, buffer: Data())
+        // Целый запрос должен прийти за 5 секунд, иначе рвём соединение
+        queue.asyncAfter(deadline: .now() + 5) { conn.cancel() }
     }
-
+    
     private func receive(_ conn: NWConnection, buffer: Data) {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, isComplete, error in
             guard let self else { return }
