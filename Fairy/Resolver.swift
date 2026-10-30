@@ -192,11 +192,17 @@ struct ParamResolver {
 }
 
 extension ParamResolver {
-    /// Ответ нейросети превращаем в действие по тем же правилам проверки, что и локальный путь
-    func invocation(from reply: LLMRouter.Reply, skills: [Skill]) -> Invocation? {
-        guard let skill = skills.first(where: { $0.id == reply.skill }) else { return nil }
-        let given = (reply.args ?? [:]).mapValues(\.value)
-        guard let values = resolveAll(skill, given: given) else { return nil }
-        return Invocation(skill: skill, values: values)
+    /// Ответ нейросети превращаем в команды по тем же правилам проверки, что и локальный путь.
+    /// Если хоть одна не прошла проверку, не выполняем ничего.
+    func invocations(from reply: LLMRouter.Reply, skills: [Skill]) -> [Invocation]? {
+        guard !reply.commands.isEmpty, reply.commands.count <= 5 else { return nil }
+        var result: [Invocation] = []
+        for command in reply.commands {
+            guard let skill = skills.first(where: { $0.id == command.skill }) else { return nil }
+            let given = (command.args ?? [:]).mapValues(\.value)
+            guard let values = resolveAll(skill, given: given) else { return nil }
+            result.append(Invocation(skill: skill, values: values))
+        }
+        return result
     }
 }

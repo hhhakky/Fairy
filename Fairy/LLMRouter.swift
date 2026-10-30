@@ -2,8 +2,6 @@
 //  LLMRouter.swift
 //  Fairy
 //
-//  Created by Riyat Rahim on 25.10.2026.
-//
 import Foundation
 
 struct LLMRouter {
@@ -24,9 +22,27 @@ struct LLMRouter {
         }
     }
 
-    struct Reply: Decodable {
+    struct Command: Decodable {
         let skill: String
         let args: [String: FlexString]?
+    }
+
+    /// Ответ: список команд по порядку. Старый формат с одним навыком тоже понимаем.
+    struct Reply: Decodable {
+        let commands: [Command]
+
+        private enum Keys: String, CodingKey { case commands, skill, args }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: Keys.self)
+            if let list = try c.decodeIfPresent([Command].self, forKey: .commands) {
+                commands = list
+            } else {
+                let skill = try c.decode(String.self, forKey: .skill)
+                let args = try c.decodeIfPresent([String: FlexString].self, forKey: .args)
+                commands = [Command(skill: skill, args: args)]
+            }
+        }
     }
 
     private let endpoint = URL(string: "https://api.groq.com/openai/v1/chat/completions")!
@@ -48,12 +64,14 @@ struct LLMRouter {
 
         var lines = [
             "You convert a voice command (Russian or English) into JSON for a macOS assistant.",
-            #"Reply with JSON only: {"skill": "<skill id>" or "unknown", "args": {"<param>": "<value>"}}"#,
+            #"Reply with JSON only: {"commands": [{"skill": "<skill id>", "args": {"<param>": "<value>"}}]}"#,
             "Available skills, as id(param:type): description",
             skillLines,
             "Rules:",
-            #"- Pick a skill only if the command clearly asks for it. Otherwise, or if it is gibberish, reply {"skill":"unknown","args":{}}."#,
-            "- Fill every param of the chosen skill.",
+            "- Return one entry per action the user asks for, in the order spoken (at most 5). Words like \"потом\", \"затем\", \"и\", \"then\" between actions mean separate entries. A later action may omit the verb: \"открой терминал и заметки\" means open both apps.",
+            #"- Include an action only if it clearly matches a skill. If any part of the request is unclear, or it is gibberish, reply {"commands":[]}."#,
+            #"- Illustration: "open notes and then google cats" -> {"commands":[{"skill":"open_app","args":{"app":"Notes"}},{"skill":"web_search","args":{"query":"cats"}}]}"#,
+            "- Fill every param of each chosen skill.",
             "- text/query: plain text. int: a number."
         ]
 
@@ -86,7 +104,7 @@ struct LLMRouter {
         var body: [String: Any] = [
             "model": model,
             "temperature": 0,
-            "max_tokens": 500,
+            "max_tokens": 700,
             "response_format": ["type": "json_object"],
             "messages": [
                 ["role": "system", "content": makePrompt(skills: skills, catalog: catalog, aliases: aliases)],

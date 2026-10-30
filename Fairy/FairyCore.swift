@@ -2,12 +2,6 @@
 //  FairyCore.swift
 //  Fairy
 //
-//  Created by Riyat Rahim on 25.10.2026.
-//
-//
-//  FairyCore.swift
-//  Fairy
-//
 import Foundation
 
 @MainActor
@@ -42,6 +36,11 @@ final class FairyCore {
     func siteInfo() -> (count: Int, readable: Bool) {
         sites.reloadIfNeeded()
         return (sites.count, sites.isReadable)
+    }
+
+    func appInfo() -> (total: Int, localized: Int) {
+        catalog.reloadIfNeeded()
+        return (catalog.entries.count, catalog.localizedCount)
     }
 
     func handle(_ text: String) async {
@@ -81,13 +80,7 @@ final class FairyCore {
         // Локальный путь остаётся мгновенным и не расходует сетевые запросы.
         let router = SkillRouter(skills: store.skills, resolver: resolver)
         if let invocations = router.routeSequence(clean) {
-            for (index, invocation) in invocations.enumerated() {
-                // Если шаг не удался, остальные не выполняем
-                guard await execute(invocation) else { return }
-                if index < invocations.count - 1 {
-                    try? await Task.sleep(for: .milliseconds(400))
-                }
-            }
+            await runChain(invocations)
             return
         }
 
@@ -109,11 +102,11 @@ final class FairyCore {
                 catalog: catalog,
                 aliases: store.aliases
             )
-            guard let invocation = resolver.invocation(from: reply, skills: store.skills) else {
+            guard let invocations = resolver.invocations(from: reply, skills: store.skills) else {
                 flash(.error("Не поняла: \(clean.prefix(30))"), for: 2)
                 return
             }
-            await execute(invocation)
+            await runChain(invocations)
         } catch let error as LLMRouter.LLMError {
             flash(.error(error.message), for: 2.5)
         } catch let error as URLError {
@@ -121,6 +114,16 @@ final class FairyCore {
             flash(.error("Сеть: \(error.code.rawValue)"), for: 4)
         } catch {
             flash(.error("Ошибка ответа"), for: 2.5)
+        }
+    }
+
+    /// Выполняет команды по порядку; если шаг не удался, остальные пропускаются.
+    private func runChain(_ invocations: [Invocation]) async {
+        for (index, invocation) in invocations.enumerated() {
+            guard await execute(invocation) else { return }
+            if index < invocations.count - 1 {
+                try? await Task.sleep(for: .milliseconds(400))
+            }
         }
     }
 

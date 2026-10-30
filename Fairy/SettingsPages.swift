@@ -239,7 +239,9 @@ struct SkillsPage: View {
     @State private var errors: [String] = []
     @State private var sitesCount = 0
     @State private var sitesReadable = true
-
+    @State private var appsTotal = 0
+    @State private var appsLocalized = 0
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             PageTitle("Навыки", "Команды, которые умеет Фея. Файлы лежат в папке навыков")
@@ -268,7 +270,12 @@ struct SkillsPage: View {
                     }
                 }
             }
-            
+            Card("Приложения") {
+                Row("Каталог",
+                    subtitle: "Найдено: \(appsTotal), с названиями на других языках: \(appsLocalized)") {
+                    EmptyView()
+                }
+            }
             Card("Закладки Safari") {
                 Row("Статус",
                     subtitle: sitesReadable
@@ -317,6 +324,9 @@ struct SkillsPage: View {
         let s = app.core.siteInfo()
         sitesCount = s.count
         sitesReadable = s.readable
+        let a = app.core.appInfo()
+        appsTotal = a.total
+        appsLocalized = a.localized
     }
 
     private func symbol(for s: Skill) -> String {
@@ -337,6 +347,7 @@ struct PhonePage: View {
     @State private var portText = ""
     @State private var tokenVisible = false
     @State private var confirmReset = false
+    
 
     private var hostName: String { Host.current().localizedName ?? "mac" }
 
